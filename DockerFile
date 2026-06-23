@@ -72,6 +72,16 @@ ENV SESSION_HTTP_ONLY="true"
 ENV SESSION_ENCRYPT="false"
 ENV SESSION_EXPIRE_ON_CLOSE="false"
 
+# Mail configuration (Gmail SMTP)
+ENV MAIL_MAILER="smtp"
+ENV MAIL_HOST="smtp.gmail.com"
+ENV MAIL_PORT="587"
+ENV MAIL_USERNAME="dinihasya15@gmail.com"
+ENV MAIL_PASSWORD="pcoq evxp fluh mbmq"
+ENV MAIL_FROM_ADDRESS="dinihasya15@gmail.com"
+ENV MAIL_FROM_NAME="UniSpa"
+ENV MAIL_ENCRYPTION="tls"
+
 # Permissions for Laravel
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache \
  && chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache

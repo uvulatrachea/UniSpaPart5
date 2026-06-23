@@ -242,6 +242,7 @@ class CustomerAuthController extends Controller
 
     /**
      * Handle email verification when user clicks the link.
+     * Auto-login the user and redirect to customer dashboard.
      */
     public function verifyEmail(Request $request, $id, $hash): RedirectResponse
     {
@@ -253,8 +254,11 @@ class CustomerAuthController extends Controller
         }
         
         if ($customer->hasVerifiedEmail()) {
-            return redirect()->route('customer.login')
-                ->with('success', 'Your email has already been verified. Please login.');
+            // Already verified - auto-login and go to dashboard
+            Auth::guard('customer')->login($customer);
+            $request->session()->regenerate();
+            return redirect()->route('customer.dashboard')
+                ->with('success', 'Welcome back! Your email is already verified.');
         }
         
         $customer->markEmailAsVerified();
@@ -264,8 +268,12 @@ class CustomerAuthController extends Controller
             'verification_status' => 'verified',
         ]);
         
-        return redirect()->route('customer.login')
-            ->with('success', 'Email verified successfully! You can now login.');
+        // Auto-login the customer after successful verification
+        Auth::guard('customer')->login($customer);
+        $request->session()->regenerate();
+        
+        return redirect()->route('customer.dashboard')
+            ->with('success', 'Email verified successfully! Welcome to UniSpa.');
     }
 
     public function sendLoginOtp(SendOtpRequest $request)
