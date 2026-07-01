@@ -1,16 +1,43 @@
-import React, { useMemo, useState } from "react";
-import { Link, useForm } from "@inertiajs/react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useForm, usePage } from "@inertiajs/react";
 import CustomerLayout from "@/Layouts/CustomerLayout";
 
-export default function Reviews({ auth, reviews = [], topReview = null, stats = {}, canReviewBookings = [] }) {
-  const username = auth?.user?.name || "Guest";
+export default function Reviews({
+  reviews = [],
+  topReview = null,
+  stats = {},
+  canReviewBookings = [],
+  initialBookingId = "",
+}) {
+  const { flash = {} } = usePage().props;
   const [selectedRating, setSelectedRating] = useState(5);
+  const [toast, setToast] = useState({ open: false, type: "success", text: "" });
+
+  const resolvedInitial = useMemo(() => {
+    if (initialBookingId && canReviewBookings.some((b) => b.booking_id === initialBookingId)) {
+      return initialBookingId;
+    }
+    return canReviewBookings?.[0]?.booking_id || "";
+  }, [initialBookingId, canReviewBookings]);
 
   const { data, setData, post, processing, errors, reset } = useForm({
-    booking_id: canReviewBookings?.[0]?.booking_id || "",
+    booking_id: resolvedInitial,
     rating: 5,
     comment: "",
   });
+
+  useEffect(() => {
+    if (flash?.success) {
+      setToast({ open: true, type: "success", text: flash.success });
+      const t = setTimeout(() => setToast((p) => ({ ...p, open: false })), 5500);
+      return () => clearTimeout(t);
+    }
+    if (flash?.error) {
+      setToast({ open: true, type: "error", text: flash.error });
+      const t = setTimeout(() => setToast((p) => ({ ...p, open: false })), 5500);
+      return () => clearTimeout(t);
+    }
+  }, [flash?.success, flash?.error]);
 
   const average = Number(stats?.avgRating ?? 0).toFixed(1);
 
@@ -29,6 +56,8 @@ export default function Reviews({ auth, reviews = [], topReview = null, stats = 
       preserveScroll: true,
       onSuccess: () => {
         reset("comment");
+        setSelectedRating(5);
+        setData("rating", 5);
       },
     });
   };
@@ -40,6 +69,29 @@ export default function Reviews({ auth, reviews = [], topReview = null, stats = 
 
   return (
     <CustomerLayout title="Customer Reviews" active="reviews">
+
+      {/* Toast */}
+      <div
+        className={`fixed right-4 top-24 z-50 w-[calc(100%-2rem)] max-w-md transform rounded-2xl border px-4 py-4 shadow-2xl transition-all duration-500 ${
+          toast.type === "error"
+            ? "border-rose-200 bg-rose-50 text-rose-800"
+            : "border-emerald-200 bg-emerald-50 text-emerald-800"
+        } ${toast.open ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-12 opacity-0"}`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex items-start gap-3">
+          <div className="pt-0.5 text-lg">{toast.type === "error" ? "⚠️" : "✅"}</div>
+          <p className="flex-1 text-sm font-bold leading-relaxed">{toast.text}</p>
+          <button
+            onClick={() => setToast((p) => ({ ...p, open: false }))}
+            className="rounded-lg px-2 py-1 text-xs font-black hover:bg-black/5"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
 
       <main className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
         <section className="rounded-2xl bg-white shadow-xl border border-slate-100 p-6 sm:p-8">
@@ -90,7 +142,7 @@ export default function Reviews({ auth, reviews = [], topReview = null, stats = 
 
           <div className="rounded-2xl bg-white shadow-xl border border-slate-100 p-6">
             <h2 className="text-xl font-extrabold text-slate-900">Add Your Review</h2>
-            <p className="mt-1 text-sm text-slate-500 font-semibold">You can review completed/confirmed bookings that have not been reviewed yet.</p>
+            <p className="mt-1 text-sm text-slate-500 font-semibold">You can review completed bookings that have not been reviewed yet.</p>
 
             <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
               <div>
@@ -103,7 +155,7 @@ export default function Reviews({ auth, reviews = [], topReview = null, stats = 
                   <option value="">Select booking</option>
                   {canReviewBookings.map((b) => (
                     <option key={b.booking_id} value={b.booking_id}>
-                      {b.booking_id} • {b.service_name}
+                      {b.service_name || "Service"} – {formatSlotDate(b.slot_date)}
                     </option>
                   ))}
                 </select>
@@ -172,4 +224,11 @@ function formatDate(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleDateString("en-MY", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function formatSlotDate(value) {
+  if (!value) return "Unknown date";
+  const d = new Date(value + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString("en-MY", { day: "numeric", month: "long", year: "numeric" });
 }

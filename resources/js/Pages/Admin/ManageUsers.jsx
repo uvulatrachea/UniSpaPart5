@@ -215,7 +215,7 @@ export default function ManageUsers({
           {section === "staff" ? (
             <div className="mt-4 space-y-4">
               <UsersTable
-                title="General Staff"
+                title="Full-Time Staff"
                 rows={generalStaff.data || []}
                 columns={["User Details", "Role", "Status", "Qualifications", "Registered Date", "Action"]}
                 renderRow={(row) => (
@@ -233,7 +233,7 @@ export default function ManageUsers({
               />
 
               <UsersTable
-                title="Student Staff"
+                title="Part-Time Staff"
                 rows={studentStaff.data || []}
                 columns={["User Details", "Role", "Status", "Working Hours", "Registered Date", "Action"]}
                 renderRow={(row) => (
@@ -356,7 +356,7 @@ function StaffModal({ modal, onClose }) {
     if (data.staff_type === "student") {
       const hours = Number(data.working_hours);
       if (!Number.isFinite(hours) || hours < 12) {
-        alert("Student staff must have minimum 12 working hours.");
+        alert("Part-Time staff must have minimum 12 working hours.");
         return;
       }
     }
@@ -368,7 +368,7 @@ function StaffModal({ modal, onClose }) {
     }
   };
 
-  return <ModalLayout title={`${modal.mode === "create" ? "Add" : "Edit"} Staff User`} onClose={onClose} onSubmit={submit} processing={processing} errors={errors} data={data} setData={setData} isStaff />;
+  return <ModalLayout title={`${modal.mode === "create" ? "Add" : "Edit"} Staff User`} onClose={onClose} onSubmit={submit} processing={processing} errors={errors} data={data} setData={setData} isStaff isCreate={modal.mode === "create"} />;
 }
 
 function CustomerModal({ modal, onClose }) {
@@ -390,23 +390,30 @@ function CustomerModal({ modal, onClose }) {
     }
   };
 
-  return <ModalLayout title={`${modal.mode === "create" ? "Add" : "Edit"} Customer User`} onClose={onClose} onSubmit={submit} processing={processing} errors={errors} data={data} setData={setData} />;
+  return <ModalLayout title={`${modal.mode === "create" ? "Add" : "Edit"} Customer User`} onClose={onClose} onSubmit={submit} processing={processing} errors={errors} data={data} setData={setData} isCreate={modal.mode === "create"} />;
 }
 
-function ModalLayout({ title, onClose, onSubmit, processing, errors, data, setData, isStaff = false }) {
+function ModalLayout({ title, onClose, onSubmit, processing, errors, data, setData, isStaff = false, isCreate = false }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <form onSubmit={onSubmit} className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
+      <form onSubmit={onSubmit} className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl max-h-screen overflow-y-auto">
         <h3 className="text-lg font-extrabold text-slate-800">{title}</h3>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Name" value={data.name} onChange={(v) => setData("name", v)} error={errors.name} />
           <Field label="Email" type="email" value={data.email} onChange={(v) => setData("email", v)} error={errors.email} />
           <Field label="Phone" value={data.phone} onChange={(v) => setData("phone", v)} error={errors.phone} />
-          <Field label="Password" type="password" value={data.password} onChange={(v) => setData("password", v)} error={errors.password} />
+          <Field label={isCreate ? "Password" : "Password (leave blank to keep)"} type="password" value={data.password} onChange={(v) => setData("password", v)} error={errors.password} />
+          {isCreate && data.password && <PasswordRequirementsHint password={data.password} />}
 
           {isStaff ? (
             <>
-              <SelectField label="Staff Type" value={data.staff_type} onChange={(v) => setData("staff_type", v)} options={["general", "student"]} />
+              <label className="text-sm">
+                <span className="mb-1 block font-medium text-slate-700">Staff Type</span>
+                <select value={data.staff_type} onChange={(e) => setData("staff_type", e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2">
+                  <option value="general">Full-Time Staff</option>
+                  <option value="student">Part-Time Staff</option>
+                </select>
+              </label>
               <Field label="Role" value={data.role} onChange={(v) => setData("role", v)} error={errors.role} />
               <SelectField label="Work Status" value={data.work_status} onChange={(v) => setData("work_status", v)} options={["active", "inactive"]} />
               {data.staff_type === "student" && (
@@ -439,6 +446,28 @@ function ModalLayout({ title, onClose, onSubmit, processing, errors, data, setDa
           <button disabled={processing} className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Save</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function PasswordRequirementsHint({ password }) {
+  const checks = [
+    { label: "8+ characters", ok: password.length >= 8 },
+    { label: "Uppercase (A-Z)", ok: /[A-Z]/.test(password) },
+    { label: "Number (0-9)", ok: /[0-9]/.test(password) },
+    { label: "Symbol (!@#…)", ok: /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password) },
+  ];
+  if (checks.every((c) => c.ok)) return null;
+  return (
+    <div className="col-span-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs">
+      <p className="mb-1 font-semibold text-amber-700">Password must include:</p>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {checks.map((c) => (
+          <span key={c.label} className={c.ok ? "text-emerald-600" : "text-amber-700"}>
+            {c.ok ? "✓" : "○"} {c.label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -477,18 +506,42 @@ function UsersTable({ title, rows, columns, renderRow, links, onPaginate }) {
 }
 
 function Field({ label, value, onChange, error, type = "text", ...inputProps }) {
+  const [showPw, setShowPw] = useState(false);
+  const isPassword = type === "password";
   return (
-    <label className="text-sm">
+    <div className="text-sm">
       <span className="mb-1 block font-medium text-slate-700">{label}</span>
-      <input
-        type={type}
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2"
-        {...inputProps}
-      />
+      <div className="relative">
+        <input
+          type={isPassword ? (showPw ? "text" : "password") : type}
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value)}
+          className={`w-full rounded-lg border border-slate-200 px-3 py-2 ${isPassword ? "pr-9" : ""}`}
+          {...inputProps}
+        />
+        {isPassword && (
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => setShowPw((v) => !v)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none"
+            aria-label={showPw ? "Hide password" : "Show password"}
+          >
+            {showPw ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.769m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            )}
+          </button>
+        )}
+      </div>
       {error && <span className="text-xs text-rose-600">{error}</span>}
-    </label>
+    </div>
   );
 }
 

@@ -8,6 +8,7 @@ export default function Appointments({ auth, appointments, highlightBookingId = 
   const list = appointments?.data || [];
   const flash = usePage().props?.flash || {};
   const [toast, setToast] = useState({ open: false, type: "success", text: "" });
+  const [cancelModal, setCancelModal] = useState({ open: false, bookingId: null });
 
   /* ── Toast from flash ── */
   const energeticMessage = useMemo(() => {
@@ -39,8 +40,12 @@ export default function Appointments({ auth, appointments, highlightBookingId = 
   }, [energeticMessage]);
 
   const cancelBooking = (bookingId) => {
-    if (!confirm("Cancel this booking? This action cannot be undone.")) return;
-    router.patch(`/bookings/${bookingId}/cancel`, {}, { preserveScroll: true });
+    setCancelModal({ open: true, bookingId });
+  };
+
+  const confirmCancel = () => {
+    router.patch(`/bookings/${cancelModal.bookingId}/cancel`, {}, { preserveScroll: true });
+    setCancelModal({ open: false, bookingId: null });
   };
 
   const editDetails = (bookingId, currentDetails = "") => {
@@ -51,6 +56,16 @@ export default function Appointments({ auth, appointments, highlightBookingId = 
 
   const needsPay = (a) =>
     a.payment_status === "unpaid" || (!a.payment_method && a.status !== "cancelled" && a.status !== "completed");
+
+  const getEffectiveStatus = (a) => {
+    if (a.status === "confirmed" && a.slot_date && a.start_time && a.end_time) {
+      const now = new Date();
+      const start = new Date(`${a.slot_date}T${a.start_time}`);
+      const end = new Date(`${a.slot_date}T${a.end_time}`);
+      if (now >= start && now <= end) return "ongoing";
+    }
+    return a.status;
+  };
 
   return (
     <CustomerLayout title="My Reservations" active="reservations">
@@ -124,7 +139,7 @@ export default function Appointments({ auth, appointments, highlightBookingId = 
                         <h3 className="text-lg sm:text-xl font-extrabold text-slate-900">
                           {a.service_name || "Spa Service"}
                         </h3>
-                        <StatusBadge status={a.status} />
+                        <StatusBadge status={getEffectiveStatus(a)} />
                       </div>
 
                       <div className="mt-2 text-sm font-semibold text-slate-700 flex flex-wrap gap-x-5 gap-y-1">
@@ -182,6 +197,15 @@ export default function Appointments({ auth, appointments, highlightBookingId = 
                             className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-unispa-primaryDark to-unispa-primary px-3 py-2 text-xs font-extrabold text-white shadow hover:opacity-95 lg:w-64"
                           >
                             Pay Now
+                          </Link>
+                        )}
+
+                        {a.status === "completed" && (
+                          <Link
+                            href={`/reviews?booking_id=${a.booking_id}`}
+                            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-extrabold text-amber-700 hover:bg-amber-100 lg:w-64"
+                          >
+                            <i className="fas fa-star" /> Write a Review
                           </Link>
                         )}
 
@@ -256,6 +280,32 @@ export default function Appointments({ auth, appointments, highlightBookingId = 
         )}
       </main>
 
+      {/* Cancel confirmation modal */}
+      {cancelModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="text-lg font-extrabold text-slate-900">Cancel Booking?</h3>
+            <p className="mt-2 text-sm font-semibold text-slate-600">
+              Are you sure you want to cancel this booking? This action cannot be undone.
+            </p>
+            <div className="mt-5 flex gap-3 justify-end">
+              <button
+                onClick={() => setCancelModal({ open: false, bookingId: null })}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-extrabold text-slate-700 hover:bg-slate-50"
+              >
+                Keep Booking
+              </button>
+              <button
+                onClick={confirmCancel}
+                className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-extrabold text-white hover:bg-rose-700"
+              >
+                Yes, Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </CustomerLayout>
   );
 }
@@ -269,10 +319,15 @@ function formatDate(v) {
 
 function StatusBadge({ status }) {
   const s = String(status || "pending").toLowerCase();
-  const label = s === "pending_approval" ? "Awaiting Approval" : s;
+  const label =
+    s === "pending_approval" ? "Awaiting Approval" :
+    s === "ongoing" ? "Ongoing" :
+    s;
   const cls =
     s === "completed"
       ? "bg-emerald-100 text-emerald-700"
+      : s === "ongoing"
+      ? "bg-teal-100 text-teal-700"
       : s === "confirmed"
       ? "bg-emerald-100 text-emerald-700"
       : s === "accepted"

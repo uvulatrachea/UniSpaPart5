@@ -21,7 +21,7 @@ use Inertia\Inertia;
 
 class PaymentController extends Controller
 {
-    private function allocateRealSlotId(string $pickedSlotId, int $serviceId): string
+    public function allocateRealSlotId(string $pickedSlotId, int $serviceId): string
     {
         // If frontend picked a real slot_id, keep it.
         if (!str_starts_with($pickedSlotId, 'TMP:')) {
@@ -29,7 +29,7 @@ class PaymentController extends Controller
         }
 
         // Format: TMP:{service_id}:{YYYY-MM-DD}:{HH:MM}
-        $parts = explode(':', $pickedSlotId);
+        $parts = explode(':', $pickedSlotId, 4);
         if (count($parts) < 4) {
             throw new \RuntimeException('Invalid slot selection.');
         }
@@ -59,7 +59,11 @@ class PaymentController extends Controller
             ->where('st.work_status', 'active')
             ->whereDate('sc.schedule_date', $date)
             ->where('sc.status', 'active')
-            ->when($hasApproval, fn($q) => $q->where('sc.approval_status', 'approved'))
+            ->when($hasApproval, fn($q) => $q->where(function ($q) {
+                $q->where('sc.approval_status', 'approved')
+                    ->orWhereNull('sc.approval_status')
+                    ->orWhere('sc.approval_status', '');
+            }))
             ->where('sc.start_time', '<=', $start)
             ->where('sc.end_time', '>=', $end)
             ->select('sc.staff_id')
@@ -82,6 +86,14 @@ class PaymentController extends Controller
                 ->when(Schema::hasColumn('treatment_room', 'category_id') && $serviceCategoryId, fn($q) => $q->where('category_id', $serviceCategoryId))
                 ->orderBy('room_id')
                 ->pluck('room_id');
+
+            if ($rooms->isEmpty()) {
+                $rooms = collect();
+                $defaultRooms = $this->getDefaultRoomsForCategory($serviceCategoryId);
+                foreach ($defaultRooms as $room) {
+                    $rooms->push($room->room_id);
+                }
+            }
         }
 
         // Busy slots on that date/time
@@ -143,6 +155,51 @@ class PaymentController extends Controller
         DB::table('slot')->insert($slotRow);
 
         return $realSlotId;
+    }
+
+    private function getDefaultRoomsForCategory(?int $serviceCategoryId): Collection
+    {
+        if (!Schema::hasTable('service_category')) {
+            return collect();
+        }
+
+        $category = DB::table('service_category')
+            ->where('id', $serviceCategoryId)
+            ->first(['name', 'gender']);
+
+        $name = strtolower((string) ($category->name ?? ''));
+        $gender = $category->gender ?? 'unisex';
+
+        $roomCounts = [
+            'barber' => 2,
+            'hair spa' => 2,
+            'massage' => 4,
+            'nail' => 3,
+            'foot' => 3,
+            'facial' => 2,
+            'makeup' => 2,
+            'muslimah' => 2,
+        ];
+
+        $count = 2;
+        foreach ($roomCounts as $needle => $rooms) {
+            if (str_contains($name, $needle)) {
+                $count = $rooms;
+                break;
+            }
+        }
+
+        $rooms = [];
+        for ($i = 1; $i <= $count; $i++) {
+            $rooms[] = (object) [
+                'room_id' => $i,
+                'status' => 'available',
+                'category_id' => $serviceCategoryId,
+                'gender' => $gender,
+            ];
+        }
+
+        return collect($rooms);
     }
 
     private function generateBookingReceipt(Booking $booking, ?string $paymentReference = null): string
@@ -349,15 +406,33 @@ class PaymentController extends Controller
         })->values();
 
         $totalFinal = round($preview->sum('final_amount'), 2);
-        $totalDeposit = round($preview->sum('deposit_amount'), 2);
+
+        // Apply session promo discount
+        $appliedPromo = session('applied_promo');
+        $promoDiscountAmount = 0.0;
+        if ($appliedPromo && $totalFinal > 0) {
+            if (($appliedPromo['discount_type'] ?? '') === 'percentage') {
+                $promoDiscountAmount = round($totalFinal * ((float)($appliedPromo['discount_value'] ?? 0) / 100), 2);
+            } else {
+                $promoDiscountAmount = min(round((float)($appliedPromo['discount_value'] ?? 0), 2), $totalFinal);
+            }
+            $totalFinal = max(0, round($totalFinal - $promoDiscountAmount, 2));
+        }
+
+        $totalDeposit = $this->deposit30($totalFinal);
 
         return Inertia::render('Booking/Payment', [
             'preview' => $preview,
             'totalFinal' => $totalFinal,
             'totalDeposit' => $totalDeposit,
             'qrUploadUrl' => route('booking.payment.qr.upload'),
-            'stripeSessionUrl' => route('booking.payment.stripe.session'),
-            'stripeMock' => $this->stripeMockEnabled(),
+            'appliedPromo' => $appliedPromo ? [
+                'code' => $appliedPromo['code'],
+                'title' => $appliedPromo['title'],
+                'discount_type' => $appliedPromo['discount_type'],
+                'discount_value' => $appliedPromo['discount_value'],
+                'promo_discount_amount' => $promoDiscountAmount,
+            ] : null,
         ]);
     }
 
@@ -367,7 +442,7 @@ class PaymentController extends Controller
             return null;
         }
 
-        $parts = explode(':', $tmpId);
+        $parts = explode(':', $tmpId, 4);
         if (count($parts) < 4) {
             return null;
         }
@@ -385,6 +460,41 @@ class PaymentController extends Controller
             'start_time' => $start,
             'end_time' => null,
         ];
+    }
+
+    private function parseTmpSlotId(string $tmpId): ?array
+    {
+        if (!str_starts_with($tmpId, 'TMP:')) {
+            return null;
+        }
+
+        $parts = explode(':', $tmpId, 4);
+        if (count($parts) < 4) {
+            return null;
+        }
+
+        return [
+            'service_id' => (int) ($parts[1] ?? 0),
+            'date' => (string) ($parts[2] ?? ''),
+            'start_time' => (string) ($parts[3] ?? ''),
+        ];
+    }
+
+    private function ensureBookingHasRealSlot(Booking $booking): Booking
+    {
+        if (!str_starts_with((string) $booking->slot_id, 'TMP:')) {
+            return $booking;
+        }
+
+        $tmpData = $this->parseTmpSlotId((string) $booking->slot_id);
+        if (empty($tmpData['service_id'])) {
+            throw new \RuntimeException('Slot data is invalid for this booking.');
+        }
+
+        $booking->slot_id = $this->allocateRealSlotId((string) $booking->slot_id, (int) $tmpData['service_id']);
+        $booking->save();
+
+        return $booking->refresh();
     }
 
     /**
@@ -570,7 +680,7 @@ class PaymentController extends Controller
         if ($forceMock) {
             try {
                 $bookingIds = DB::transaction(function () {
-                    return $this->createBookingsFromCartForQr();
+                    return $this->createBookingsFromCart();
                 });
             } catch (\Throwable $e) {
                 return response()->json(['error' => $e->getMessage()], 422);
@@ -582,8 +692,11 @@ class PaymentController extends Controller
                 'payment_status' => 'paid',
                 'status'         => 'confirmed',
             ]);
+            DB::table('slot')
+                ->whereIn('slot_id', Booking::whereIn('booking_id', $bookingIds)->pluck('slot_id'))
+                ->update(['status' => 'booked']);
 
-            session()->flash('success', 'Payment successful! Your booking is now confirmed.');
+            session()->flash('success', 'Mock payment successful! Your booking is now confirmed.');
 
             return response()->json([
                 'mock'        => true,
@@ -703,6 +816,22 @@ class PaymentController extends Controller
                 ->get();
 
             foreach ($confirmedBookings as $booking) {
+                if (str_starts_with((string) $booking->slot_id, 'TMP:')) {
+                    try {
+                        $booking = $this->ensureBookingHasRealSlot($booking);
+                    } catch (\Throwable $e) {
+                        Log::warning('Unable to allocate real slot after Stripe success.', [
+                            'booking_id' => $booking->booking_id,
+                            'slot_id' => $booking->slot_id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+
+                if (!str_starts_with((string) $booking->slot_id, 'TMP:')) {
+                    DB::table('slot')->where('slot_id', $booking->slot_id)->update(['status' => 'booked']);
+                }
+
                 $receiptPath = $this->generateBookingReceipt($booking, $receiptId);
                 $booking->digital_receipt = $receiptPath;
                 $booking->save();
@@ -783,7 +912,7 @@ class PaymentController extends Controller
         // Parse TMP slot id for display when no real slot exists
         $rawSlotId = (string) $booking->slot_id;
         if (!$slot && str_starts_with($rawSlotId, 'TMP:')) {
-            $parts = explode(':', $rawSlotId);
+            $parts = explode(':', $rawSlotId, 4);
             $tmpServiceId = (int) ($parts[1] ?? 0);
             $slotDate = $parts[2] ?? null;
             $startTime = $parts[3] ?? null;
@@ -812,9 +941,7 @@ class PaymentController extends Controller
                 'start_time'     => $startTime,
                 'end_time'       => $endTime,
             ],
-            'qrUploadUrl'     => route('bookings.repay.qr', $bookingId),
-            'stripeSessionUrl'=> route('bookings.repay.stripe', $bookingId),
-            'stripeMock'      => $this->stripeMockEnabled(),
+            'qrUploadUrl' => route('bookings.repay.qr', $bookingId),
         ]);
     }
 
@@ -869,11 +996,19 @@ class PaymentController extends Controller
         $forceMock = $request->boolean('mock') || $this->stripeMockEnabled();
 
         if ($forceMock) {
-            $booking->update([
-                'payment_method' => 'stripe',
-                'payment_status' => 'paid',
-                'status'         => 'confirmed',
-            ]);
+            try {
+                DB::transaction(function () use ($booking) {
+                    $booking = $this->ensureBookingHasRealSlot($booking);
+                    $booking->update([
+                        'payment_method' => 'stripe',
+                        'payment_status' => 'paid',
+                        'status'         => 'confirmed',
+                    ]);
+                    DB::table('slot')->where('slot_id', $booking->slot_id)->update(['status' => 'booked']);
+                });
+            } catch (\Throwable $e) {
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
 
             session()->flash('success', 'Payment done! Your booking is now confirmed.');
 

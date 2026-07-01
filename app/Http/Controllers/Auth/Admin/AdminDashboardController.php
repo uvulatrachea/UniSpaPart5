@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Booking\PaymentController;
 use App\Mail\BookingConfirmedMail;
 use App\Mail\StaffAvailabilityReviewedMail;
 use App\Models\Booking;
@@ -46,6 +47,45 @@ class AdminDashboardController extends Controller
         }
 
         return $emails->unique('email')->values()->all();
+    }
+
+    private function parseTmpSlotId(string $tmpSlotId): ?array
+    {
+        if (!str_starts_with($tmpSlotId, 'TMP:')) {
+            return null;
+        }
+
+        $parts = explode(':', $tmpSlotId, 4);
+        if (count($parts) < 4) {
+            return null;
+        }
+
+        return [
+            'service_id' => (int) ($parts[1] ?? 0),
+            'date' => (string) ($parts[2] ?? ''),
+            'start_time' => (string) ($parts[3] ?? ''),
+        ];
+    }
+
+    private function tmpServiceIdSql(): string
+    {
+        return "CASE WHEN b.slot_id LIKE 'TMP:%' THEN CAST(split_part(b.slot_id, ':', 2) AS integer) ELSE NULL END";
+    }
+
+    private function tmpSlotDateSql(): string
+    {
+        return "CASE WHEN b.slot_id LIKE 'TMP:%' THEN CAST(split_part(b.slot_id, ':', 3) AS date) ELSE NULL END";
+    }
+
+    private function tmpSlotStartSql(): string
+    {
+        // The tmp slot start is stored inside the slot_id as two parts (hour and minute).
+        // For Postgres we must return a value of type TIME so COALESCE(sl.start_time, ...) has matching types.
+        if (DB::connection()->getDriverName() === 'pgsql') {
+            return "CASE WHEN b.slot_id LIKE 'TMP:%' THEN CAST(split_part(b.slot_id, ':', 4) || ':' || split_part(b.slot_id, ':', 5) AS time) ELSE NULL END";
+        }
+
+        return "CASE WHEN b.slot_id LIKE 'TMP:%' THEN split_part(b.slot_id, ':', 4) || ':' || split_part(b.slot_id, ':', 5) ELSE NULL END";
     }
 
     private function generateBookingReceipt(Booking $booking, ?string $paymentReference = null): string
@@ -1260,10 +1300,13 @@ class AdminDashboardController extends Controller
             'is_active' => ['required', 'boolean'],
             'show_in_dashboard_header' => ['required', 'boolean'],
             'link' => ['nullable', 'string', 'max:255'],
+            'promo_code' => ['nullable', 'string', 'max:50', Rule::unique('promotion', 'promo_code')],
             'service_ids' => ['nullable', 'array'],
             'service_ids.*' => ['integer', Rule::exists('service', $servicePk)],
             'banner_file' => ['nullable', 'image', 'max:5120'],
         ]);
+
+        $promoCode = !empty($validated['promo_code']) ? strtoupper(trim($validated['promo_code'])) : null;
 
         $promotionId = DB::table('promotion')->insertGetId($this->payloadForTable('promotion', $this->withTimestamps('promotion', [
             'title' => $validated['title'],
@@ -1276,6 +1319,7 @@ class AdminDashboardController extends Controller
             'is_active' => (bool) $validated['is_active'],
             'show_in_dashboard_header' => (bool) $validated['show_in_dashboard_header'],
             'link' => $validated['link'] ?? null,
+            'promo_code' => $promoCode,
         ])), 'promotion_id');
 
         foreach (($validated['service_ids'] ?? []) as $serviceId) {
@@ -1304,10 +1348,13 @@ class AdminDashboardController extends Controller
             'is_active' => ['required', 'boolean'],
             'show_in_dashboard_header' => ['required', 'boolean'],
             'link' => ['nullable', 'string', 'max:255'],
+            'promo_code' => ['nullable', 'string', 'max:50', Rule::unique('promotion', 'promo_code')->ignore($promotionId, 'promotion_id')],
             'service_ids' => ['nullable', 'array'],
             'service_ids.*' => ['integer', Rule::exists('service', $servicePk)],
             'banner_file' => ['nullable', 'image', 'max:5120'],
         ]);
+
+        $promoCode = !empty($validated['promo_code']) ? strtoupper(trim($validated['promo_code'])) : null;
 
         $payload = [
             'title' => $validated['title'],
@@ -1319,6 +1366,7 @@ class AdminDashboardController extends Controller
             'is_active' => (bool) $validated['is_active'],
             'show_in_dashboard_header' => (bool) $validated['show_in_dashboard_header'],
             'link' => $validated['link'] ?? null,
+            'promo_code' => $promoCode,
         ];
 
         if ($request->hasFile('banner_file')) {
@@ -1555,9 +1603,9 @@ class AdminDashboardController extends Controller
             ->get();
 
         $pendingQrBookings = DB::table('booking as b')
-            ->join('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
+            ->leftJoin('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
             ->leftJoin('customers as c', 'c.customer_id', '=', 'b.customer_id')
-            ->leftJoin('service as sv', 'sv.id', '=', 'sl.service_id')
+            ->leftJoin('service as sv', DB::raw('COALESCE(sl.service_id, ' . $this->tmpServiceIdSql() . ')'), '=', 'sv.id')
             ->leftJoin('staff as st', 'st.staff_id', '=', 'sl.staff_id')
             ->leftJoin('treatment_room as tr', 'tr.room_id', '=', 'sl.room_id')
             ->where('b.payment_method', 'qr')
@@ -1569,13 +1617,13 @@ class AdminDashboardController extends Controller
                 'b.payment_status',
                 'b.depo_qr_pic',
                 'b.special_requests',
-                'sl.slot_id',
-                'sl.slot_date',
-                'sl.start_time',
+                DB::raw('COALESCE(sl.slot_id, b.slot_id) as slot_id'),
+                DB::raw('COALESCE(sl.slot_date, ' . $this->tmpSlotDateSql() . ') as slot_date'),
+                DB::raw('COALESCE(sl.start_time, ' . $this->tmpSlotStartSql() . ') as start_time'),
                 'sl.end_time',
                 'sl.staff_id',
                 'sl.room_id',
-                'sv.id as service_id',
+                DB::raw('COALESCE(sl.service_id, ' . $this->tmpServiceIdSql() . ') as service_id'),
                 'sv.category_id as service_category_id',
                 'c.name as customer_name',
                 'sv.name as service_name',
@@ -1583,8 +1631,8 @@ class AdminDashboardController extends Controller
                 'tr.room_name',
                 'tr.room_type',
             ])
-            ->orderBy('sl.slot_date')
-            ->orderBy('sl.start_time')
+            ->orderByRaw('COALESCE(sl.slot_date, ' . $this->tmpSlotDateSql() . ')')
+            ->orderByRaw('COALESCE(sl.start_time, ' . $this->tmpSlotStartSql() . ')')
             ->limit(20)
             ->get()
             ->map(function ($row) {
@@ -1593,12 +1641,16 @@ class AdminDashboardController extends Controller
             });
 
         $selectedDateBookings = DB::table('booking as b')
-            ->join('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
+            ->leftJoin('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
             ->leftJoin('customers as c', 'c.customer_id', '=', 'b.customer_id')
-            ->leftJoin('service as sv', 'sv.id', '=', 'sl.service_id')
+            ->leftJoin('service as sv', DB::raw('COALESCE(sl.service_id, ' . $this->tmpServiceIdSql() . ')'), '=', 'sv.id')
             ->leftJoin('staff as st', 'st.staff_id', '=', 'sl.staff_id')
             ->leftJoin('treatment_room as tr', 'tr.room_id', '=', 'sl.room_id')
-            ->whereDate('sl.slot_date', $selectedDate->toDateString())
+            ->where(function ($q) use ($selectedDate) {
+                $selectedDateStr = $selectedDate->toDateString();
+                $q->whereDate('sl.slot_date', $selectedDateStr)
+                    ->orWhereRaw("b.slot_id LIKE ? AND split_part(b.slot_id, ':', 3) = ?", ['TMP:%', $selectedDateStr]);
+            })
             ->whereIn('b.status', ['pending', 'accepted', 'confirmed'])
             ->select([
                 'b.booking_id',
@@ -1607,13 +1659,13 @@ class AdminDashboardController extends Controller
                 'b.payment_method',
                 'b.depo_qr_pic',
                 'b.special_requests',
-                'sl.slot_id',
-                'sl.slot_date',
-                'sl.start_time',
+                DB::raw('COALESCE(sl.slot_id, b.slot_id) as slot_id'),
+                DB::raw('COALESCE(sl.slot_date, ' . $this->tmpSlotDateSql() . ') as slot_date'),
+                DB::raw('COALESCE(sl.start_time, ' . $this->tmpSlotStartSql() . ') as start_time'),
                 'sl.end_time',
                 'sl.staff_id',
                 'sl.room_id',
-                'sv.id as service_id',
+                DB::raw('COALESCE(sl.service_id, ' . $this->tmpServiceIdSql() . ') as service_id'),
                 'sv.category_id as service_category_id',
                 'sv.name as service_name',
                 'c.name as customer_name',
@@ -1621,23 +1673,24 @@ class AdminDashboardController extends Controller
                 'tr.room_name',
                 'tr.room_type',
             ])
-            ->orderBy('sl.start_time')
+            ->orderByRaw('COALESCE(sl.start_time, ' . $this->tmpSlotStartSql() . ')')
             ->get()
             ->map(function ($row) {
                 $row->proof_url = $row->depo_qr_pic ? Storage::url($row->depo_qr_pic) : null;
                 return $row;
             });
 
+        $monthAppointmentDateSql = 'COALESCE(sl.slot_date, ' . $this->tmpSlotDateSql() . ')';
         $monthAppointmentCounts = DB::table('booking as b')
-            ->join('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
-            ->whereBetween('sl.slot_date', [$monthStart->toDateString(), $monthEnd->toDateString()])
+            ->leftJoin('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
+            ->whereBetween(DB::raw($monthAppointmentDateSql), [$monthStart->toDateString(), $monthEnd->toDateString()])
             ->whereIn('b.status', ['pending', 'accepted', 'confirmed'])
             ->select([
-                'sl.slot_date',
+                DB::raw($monthAppointmentDateSql . ' as slot_date'),
                 DB::raw('COUNT(*) as total_count'),
                 DB::raw("SUM(CASE WHEN b.payment_method = 'qr' AND b.payment_status = 'pending' THEN 1 ELSE 0 END) as qr_pending_count"),
             ])
-            ->groupBy('sl.slot_date')
+            ->groupByRaw($monthAppointmentDateSql)
             ->get();
 
         $monthSchedules = DB::table('schedule as sc')
@@ -1788,19 +1841,26 @@ class AdminDashboardController extends Controller
             // ignore mail errors
         }
 
-        return back()->with('success', "Student availability has been {$newStatus}.");
+        return back()->with('success', "Part-Time staff availability has been {$newStatus}.");
     }
 
     public function storeShift(Request $request)
     {
         $validated = $request->validate([
-            'staff_id' => ['required', 'integer', Rule::exists('staff', 'staff_id')],
+            'staff_id'      => ['required', 'integer', Rule::exists('staff', 'staff_id')],
             'schedule_date' => ['required', 'date'],
-            'start_time' => ['required', 'date_format:H:i'],
-            'end_time' => ['required', 'date_format:H:i', 'after:start_time'],
-            'created_by' => ['nullable', Rule::in(['admin', 'staff'])],
+            'start_time'    => ['required', 'date_format:H:i'],
+            'end_time'      => ['required', 'date_format:H:i', 'after:start_time'],
+            'created_by'    => ['nullable', Rule::in(['admin', 'staff'])],
+            'room_id'       => ['nullable', 'integer', Rule::exists('treatment_room', 'room_id')],
         ]);
 
+        // Business hours validation (10:00 – 18:00)
+        if ($validated['start_time'] < '10:00' || $validated['end_time'] > '18:00') {
+            return back()->with('error', 'Time outside business hours. Shifts must be within 10:00 – 18:00.');
+        }
+
+        // Staff conflict check [E1]
         $hasConflict = DB::table('schedule')
             ->where('staff_id', (int) $validated['staff_id'])
             ->whereDate('schedule_date', $validated['schedule_date'])
@@ -1810,19 +1870,40 @@ class AdminDashboardController extends Controller
             ->exists();
 
         if ($hasConflict) {
-            return back()->with('error', 'Staff scheduling conflict detected for this time range.');
+            return back()->with('error', 'Staff already scheduled during this time period.');
         }
 
-        DB::table('schedule')->insert([
-            'staff_id' => (int) $validated['staff_id'],
-            'schedule_date' => $validated['schedule_date'],
-            'start_time' => $validated['start_time'],
-            'end_time' => $validated['end_time'],
-            'created_by' => $validated['created_by'] ?? 'admin',
-            'status' => 'active',
-        ]);
+        // Room conflict check [E2]
+        if (!empty($validated['room_id'])) {
+            $roomConflict = DB::table('schedule')
+                ->whereDate('schedule_date', $validated['schedule_date'])
+                ->where('status', 'active')
+                ->where('start_time', '<', $validated['end_time'])
+                ->where('end_time', '>', $validated['start_time'])
+                ->when(Schema::hasColumn('schedule', 'room_id'), fn ($q) => $q->where('room_id', (int) $validated['room_id']))
+                ->exists();
 
-        return back()->with('success', 'Shift/availability saved successfully.');
+            if ($roomConflict && Schema::hasColumn('schedule', 'room_id')) {
+                return back()->with('error', 'Selected room is already occupied during this time period.');
+            }
+        }
+
+        $insertData = [
+            'staff_id'      => (int) $validated['staff_id'],
+            'schedule_date' => $validated['schedule_date'],
+            'start_time'    => $validated['start_time'],
+            'end_time'      => $validated['end_time'],
+            'created_by'    => $validated['created_by'] ?? 'admin',
+            'status'        => 'active',
+        ];
+
+        if (!empty($validated['room_id']) && Schema::hasColumn('schedule', 'room_id')) {
+            $insertData['room_id'] = (int) $validated['room_id'];
+        }
+
+        DB::table('schedule')->insert($insertData);
+
+        return back()->with('success', 'Shift added successfully.');
     }
 
     public function publishSchedule(Request $request)
@@ -1865,6 +1946,27 @@ class AdminDashboardController extends Controller
         }
 
         $slot = $booking->slot;
+        if (!$slot && str_starts_with((string) $booking->slot_id, 'TMP:')) {
+            $parsedTmp = $this->parseTmpSlotId((string) $booking->slot_id);
+            if (!$parsedTmp || empty($parsedTmp['service_id'])) {
+                return back()->with('error', 'Slot data is invalid for this booking.');
+            }
+
+            try {
+                $realSlotId = app(PaymentController::class)->allocateRealSlotId((string) $booking->slot_id, $parsedTmp['service_id']);
+                $booking->slot_id = $realSlotId;
+                $booking->save();
+                $booking->refresh();
+                $slot = $booking->slot;
+            } catch (\Throwable $e) {
+                \Log::error('Unable to allocate real slot for QR booking confirmation: ' . $e->getMessage(), [
+                    'booking_id' => $booking->booking_id,
+                    'slot_id' => $booking->slot_id,
+                ]);
+                return back()->with('error', 'Unable to allocate a real slot for this booking. Please review availability and try again.');
+            }
+        }
+
         if (!$slot) {
             return back()->with('error', 'Slot not found for this booking.');
         }
@@ -1923,7 +2025,7 @@ class AdminDashboardController extends Controller
                 ]);
 
             $booking->payment_status = 'paid';
-            $booking->status = 'accepted';
+            $booking->status = 'confirmed';
             if (!empty($validated['room_id']) && Schema::hasColumn('booking', 'room_id')) {
                 $booking->room_id = (int) $validated['room_id'];
             }
@@ -1948,7 +2050,7 @@ class AdminDashboardController extends Controller
             \Log::warning('QR confirm email failed: ' . $e->getMessage());
         }
 
-        return back()->with('success', 'Payment proof verified, booking confirmed, staff assigned.');
+        return back()->with('success', 'Booking confirmed. Customer has been notified.');
     }
 
     public function bookings()
@@ -1966,9 +2068,9 @@ class AdminDashboardController extends Controller
         $selectedDateStr = $selectedDate->toDateString();
 
         $bookingsBase = DB::table('booking as b')
-            ->join('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
+            ->leftJoin('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
             ->leftJoin('customers as c', 'c.customer_id', '=', 'b.customer_id')
-            ->leftJoin('service as sv', 'sv.id', '=', 'sl.service_id')
+            ->leftJoin('service as sv', DB::raw('COALESCE(sl.service_id, ' . $this->tmpServiceIdSql() . ')'), '=', 'sv.id')
             ->leftJoin('staff as st', 'st.staff_id', '=', 'sl.staff_id')
             ->leftJoin('treatment_room as tr', 'tr.room_id', '=', 'sl.room_id')
             ->select([
@@ -1984,11 +2086,11 @@ class AdminDashboardController extends Controller
                 'b.depo_qr_pic',
                 'b.digital_receipt',
                 'b.created_at',
-                'sl.slot_id',
-                'sl.slot_date',
-                'sl.start_time',
+                DB::raw('COALESCE(sl.slot_id, b.slot_id) as slot_id'),
+                DB::raw('COALESCE(sl.slot_date, ' . $this->tmpSlotDateSql() . ') as slot_date'),
+                DB::raw('COALESCE(sl.start_time, ' . $this->tmpSlotStartSql() . ') as start_time'),
                 'sl.end_time',
-                'sl.service_id',
+                DB::raw('COALESCE(sl.service_id, ' . $this->tmpServiceIdSql() . ') as service_id'),
                 'sv.name as service_name',
                 'sv.category_id as service_category_id',
                 'c.name as customer_name',
@@ -2018,12 +2120,17 @@ class AdminDashboardController extends Controller
         }
 
         if ($serviceId !== 'all' && is_numeric($serviceId)) {
-            $bookingsBase->where('sl.service_id', (int) $serviceId);
+            $bookingsBase->where(function ($q) use ($serviceId) {
+                $q->where('sl.service_id', (int) $serviceId)
+                    ->orWhereRaw("b.slot_id LIKE ? AND split_part(b.slot_id, ':', 2) = ?", ['TMP:%', (string) $serviceId]);
+            });
         }
 
+        $bookingDateSql = 'COALESCE(sl.slot_date, ' . $this->tmpSlotDateSql() . ')';
+        $bookingStartSql = 'COALESCE(sl.start_time, ' . $this->tmpSlotStartSql() . ')';
         $bookings = (clone $bookingsBase)
-            ->orderByDesc('sl.slot_date')
-            ->orderByDesc('sl.start_time')
+            ->orderByDesc(DB::raw($bookingDateSql))
+            ->orderByDesc(DB::raw($bookingStartSql))
             ->paginate($perPage)
             ->through(function ($row) {
                 $booking = new Booking([
@@ -2047,34 +2154,38 @@ class AdminDashboardController extends Controller
             ->withQueryString();
 
         $selectedDateBookings = DB::table('booking as b')
-            ->join('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
+            ->leftJoin('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
             ->leftJoin('customers as c', 'c.customer_id', '=', 'b.customer_id')
-            ->leftJoin('service as sv', 'sv.id', '=', 'sl.service_id')
-            ->whereDate('sl.slot_date', $selectedDateStr)
+            ->leftJoin('service as sv', DB::raw('COALESCE(sl.service_id, ' . $this->tmpServiceIdSql() . ')'), '=', 'sv.id')
+            ->where(function ($q) use ($selectedDateStr) {
+                $q->whereDate('sl.slot_date', $selectedDateStr)
+                    ->orWhereRaw("b.slot_id LIKE ? AND split_part(b.slot_id, ':', 3) = ?", ['TMP:%', $selectedDateStr]);
+            })
             ->select([
                 'b.booking_id',
                 'b.status',
                 'b.payment_status',
                 'b.payment_method',
-                'sl.slot_date',
-                'sl.start_time',
+                DB::raw('COALESCE(sl.slot_date, ' . $this->tmpSlotDateSql() . ') as slot_date'),
+                DB::raw('COALESCE(sl.start_time, ' . $this->tmpSlotStartSql() . ') as start_time'),
                 'sl.end_time',
                 'sv.name as service_name',
                 'c.name as customer_name',
                 'b.final_amount',
             ])
-            ->orderBy('sl.start_time')
+            ->orderByRaw($bookingStartSql)
             ->get();
 
+        $monthBookingDateSql = 'COALESCE(sl.slot_date, ' . $this->tmpSlotDateSql() . ')';
         $monthBookingCounts = DB::table('booking as b')
-            ->join('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
-            ->whereBetween('sl.slot_date', [$monthStart, $monthEnd])
+            ->leftJoin('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
+            ->whereBetween(DB::raw($monthBookingDateSql), [$monthStart, $monthEnd])
             ->select([
-                'sl.slot_date',
+                DB::raw($monthBookingDateSql . ' as slot_date'),
                 DB::raw('COUNT(*) as total_count'),
                 DB::raw("SUM(CASE WHEN b.payment_status = 'pending' THEN 1 ELSE 0 END) as pending_payment_count"),
             ])
-            ->groupBy('sl.slot_date')
+            ->groupByRaw($monthBookingDateSql)
             ->get();
 
         $services = DB::table('service')
@@ -2145,7 +2256,7 @@ class AdminDashboardController extends Controller
             \Log::warning('Booking approved but email failed: ' . $e->getMessage());
         }
 
-        return back()->with('success', 'Booking approved successfully.');
+        return back()->with('success', 'Booking confirmed.');
     }
 
     public function updateBookingStatus(Request $request, string $bookingId)

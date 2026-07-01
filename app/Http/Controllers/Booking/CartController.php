@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Cart;
 use App\Models\Service;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 
 class CartController extends Controller
@@ -64,12 +65,33 @@ class CartController extends Controller
             $total = round($subtotal - $discountAmount, 2);
         }
 
+        // Applied promo from session
+        $appliedPromo = session('applied_promo');
+        $promoDiscountAmount = 0.0;
+        if ($appliedPromo && $total > 0) {
+            if (($appliedPromo['discount_type'] ?? '') === 'percentage') {
+                $promoDiscountAmount = round($total * ((float)($appliedPromo['discount_value'] ?? 0) / 100), 2);
+            } else {
+                $promoDiscountAmount = min(round((float)($appliedPromo['discount_value'] ?? 0), 2), $total);
+            }
+            $total = max(0, round($total - $promoDiscountAmount, 2));
+        }
+
         return Inertia::render('Booking/Cart', [
             'cartItems' => $enriched,
             'subtotal' => round($subtotal, 2),
             'discountAmount' => $discountAmount,
             'total' => $total,
             'isUitmMember' => $isUitmMember,
+            'appliedPromo' => $appliedPromo ? [
+                'code' => $appliedPromo['code'],
+                'title' => $appliedPromo['title'],
+                'discount_type' => $appliedPromo['discount_type'],
+                'discount_value' => $appliedPromo['discount_value'],
+                'promo_discount_amount' => $promoDiscountAmount,
+            ] : null,
+            'promoError' => session('promo_error'),
+            'promoSuccess' => session('promo_success'),
         ]);
     }
 
@@ -136,5 +158,40 @@ class CartController extends Controller
         Cart::where('customer_id', $customerId)->update(['items' => []]);
 
         return back()->with('success', 'Cart cleared');
+    }
+
+    public function applyPromo(Request $request)
+    {
+        $data = $request->validate(['code' => ['required', 'string', 'max:50']]);
+        $code = strtoupper(trim($data['code']));
+
+        $promo = DB::table('promotion')
+            ->where('promo_code', $code)
+            ->where('is_active', true)
+            ->where(function ($q) {
+                $q->whereNull('end_date')
+                  ->orWhere('end_date', '>=', now()->toDateString());
+            })
+            ->first();
+
+        if (!$promo) {
+            return back()->with('promo_error', 'Invalid or expired promotion code.');
+        }
+
+        session()->put('applied_promo', [
+            'promotion_id' => $promo->promotion_id,
+            'code' => $promo->promo_code,
+            'title' => $promo->title,
+            'discount_type' => $promo->discount_type,
+            'discount_value' => $promo->discount_value,
+        ]);
+
+        return back()->with('promo_success', 'Promotion applied successfully!');
+    }
+
+    public function removePromo(Request $request)
+    {
+        session()->forget('applied_promo');
+        return back()->with('success', 'Promotion removed.');
     }
 }

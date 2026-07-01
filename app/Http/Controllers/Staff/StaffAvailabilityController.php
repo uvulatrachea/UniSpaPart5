@@ -74,7 +74,7 @@ class StaffAvailabilityController extends Controller
             'requiredHours' => $requiredHours,
             'officeHours' => [
                 'start' => '10:00',
-                'end' => '19:00',
+                'end' => '18:00',
             ],
             'filters' => [
                 'week_start' => $weekStart->toDateString(),
@@ -147,9 +147,9 @@ class StaffAvailabilityController extends Controller
                 return back()->with('error', 'End time must be after start time.');
             }
 
-            // Office hours 10:00 - 19:00
-            if ($e['start_time'] < '10:00' || $e['end_time'] > '19:00') {
-                return back()->with('error', 'Availability must be within office hours (10:00 - 19:00).');
+            // Office hours 10:00 - 18:00
+            if ($e['start_time'] < '10:00' || $e['end_time'] > '18:00') {
+                return back()->with('error', 'Availability must be within office hours (10:00 - 18:00).');
             }
         }
 
@@ -234,7 +234,7 @@ class StaffAvailabilityController extends Controller
 
         $msg = $mode === 'draft'
             ? 'Draft saved. You can keep adding hours until you reach the minimum, then submit for approval.'
-            : 'Availability submitted. Waiting for admin approval.';
+            : 'Availability saved. Admin will review and publish.';
 
         // Email notification to student staff upon successful submission
         // (draft should not send email)

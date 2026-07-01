@@ -14,7 +14,12 @@ return Application::configure(basePath: dirname(__DIR__))
             Route::middleware('web')->group(base_path('routes/auth.php'));
         },
     )
+    ->withCommands([
+        __DIR__.'/../app/Console/Commands',
+    ])
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->trustProxies(at: '*');
+
         $middleware->web(append: [
             'check_role'=>\App\Http\Middleware\HandleInertiaRequests::class,
             'check_status'=>\Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets::class,

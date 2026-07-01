@@ -1,13 +1,12 @@
-import React, { useMemo } from "react";
-import { Link, router, usePage } from "@inertiajs/react";
+import React, { useMemo, useState } from "react";
+import { Link, router } from "@inertiajs/react";
 import CustomerLayout from "@/Layouts/CustomerLayout";
 
 const FALLBACK_IMG = "https://placehold.co/900x600/5B21B6/ffffff?text=UniSpa+Service";
 
-export default function Cart({ cartItems = [], subtotal: propSubtotal, discountAmount = 0, total: propTotal, isUitmMember = false }) {
-  const { auth } = usePage().props;
-  const username = auth?.user?.name || "Guest";
+export default function Cart({ cartItems = [], subtotal: propSubtotal, discountAmount = 0, total: propTotal, isUitmMember = false, appliedPromo = null, promoError = null, promoSuccess = null }) {
   const items = Array.isArray(cartItems) ? cartItems : [];
+  const [promoCode, setPromoCode] = useState("");
 
   const totals = useMemo(() => {
     const computedSubtotal = items.reduce((sum, it) => {
@@ -154,10 +153,60 @@ export default function Cart({ cartItems = [], subtotal: propSubtotal, discountA
                     <span>- RM {totals.discountAmount.toFixed(2)}</span>
                   </div>
                 )}
-                {(totals.discountAmount > 0 || totals.isUitmMember) && (
-                  <div className="flex justify-between text-base font-extrabold text-slate-900 pt-1">
-                    <span>Total</span>
-                    <span>RM {totals.total.toFixed(2)}</span>
+                {appliedPromo && (
+                  <div className="flex justify-between text-violet-700">
+                    <span>Promo: {appliedPromo.code}</span>
+                    <span>- RM {Number(appliedPromo.promo_discount_amount || 0).toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-base font-extrabold text-slate-900 border-t border-slate-200 pt-2">
+                  <span>Total</span>
+                  <span>RM {totals.total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Promo code */}
+              <div className="mt-4">
+                <p className="text-xs font-bold text-slate-500 mb-1">Promo Code</p>
+                {promoSuccess && (
+                  <p className="mb-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-700">{promoSuccess}</p>
+                )}
+                {promoError && (
+                  <p className="mb-2 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-xs font-bold text-rose-700">{promoError}</p>
+                )}
+                {appliedPromo ? (
+                  <div className="flex items-center justify-between rounded-lg border border-violet-200 bg-violet-50 px-3 py-2">
+                    <span className="text-xs font-extrabold text-violet-700">{appliedPromo.code} applied</span>
+                    <button
+                      type="button"
+                      onClick={() => router.post(route("booking.cart.promo.remove"), {}, { preserveScroll: true })}
+                      className="text-xs font-bold text-rose-600 hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={promoCode}
+                      onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                      placeholder="Enter promo code"
+                      className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          router.post(route("booking.cart.promo.apply"), { code: promoCode }, { preserveScroll: true });
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => router.post(route("booking.cart.promo.apply"), { code: promoCode }, { preserveScroll: true })}
+                      className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-extrabold text-white hover:bg-violet-700"
+                    >
+                      Apply
+                    </button>
                   </div>
                 )}
               </div>

@@ -202,7 +202,7 @@ class AppointmentController extends Controller
         // Format: TMP:{service_id}:{YYYY-MM-DD}:{HH:MM}
         $rawSlotId = (string) $b->slot_id;
         if (!$slot && str_starts_with($rawSlotId, 'TMP:')) {
-            $parts = explode(':', $rawSlotId);
+            $parts = explode(':', $rawSlotId, 4);
             $tmpServiceId = (int) ($parts[1] ?? 0);
             $slotDate = $parts[2] ?? null;
             $startTime = $parts[3] ?? null;
@@ -262,13 +262,13 @@ class AppointmentController extends Controller
         }
 
         if (!$booking->canBeManagedByCustomer(24)) {
-            return back()->with('error', 'Cancellation is only allowed until 24 hours before your appointment.');
+            return back()->with('error', 'Cancellation not allowed within 24 hours of appointment.');
         }
 
         $booking->status = 'cancelled';
         $booking->save();
 
-        return back()->with('success', 'Your booking has been cancelled.');
+        return back()->with('success', 'Booking cancelled successfully. Refund initiated.');
     }
 
     public function updateBookingDetails(Request $request, string $bookingId)

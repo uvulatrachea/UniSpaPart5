@@ -7,6 +7,7 @@ use App\Models\Cart;
 use App\Models\Service;
 use App\Models\Slot;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -18,6 +19,94 @@ class ScheduleController extends Controller
     {
         // Support both schemas: service.id (new) or service.service_id (old SQL).
         return Schema::hasColumn('service', 'id') ? 'id' : 'service_id';
+    }
+
+    private function buildAvailableSlotsForDate(int $serviceId, int $duration, Collection $scheduleRows, Collection $busySlots, Collection $rooms, string $date, int $officeStart = 600, int $officeEnd = 1140, int $step = 30): array
+    {
+        $scheduleByStaff = $scheduleRows->groupBy('staff_id');
+        $busyByStaff = $busySlots->whereNotNull('staff_id')->groupBy('staff_id');
+        $busyByRoom = $busySlots->whereNotNull('room_id')->groupBy('room_id');
+
+        $results = [];
+
+        for ($t = $officeStart; $t + $duration <= $officeEnd; $t += $step) {
+            $start = $this->minutesToTime($t);
+            $end = $this->minutesToTime($t + $duration);
+
+            $totalScheduledStaff = 0;
+            $availableStaffCount = 0;
+            foreach ($scheduleByStaff as $staffId => $ranges) {
+                $onShift = $ranges->contains(function ($r) use ($t, $duration) {
+                    $s = $this->timeToMinutes($r->start_time);
+                    $e = $this->timeToMinutes($r->end_time);
+                    return $t >= $s && ($t + $duration) <= $e;
+                });
+                if (!$onShift) {
+                    continue;
+                }
+
+                $totalScheduledStaff++;
+
+                $conflicts = $busyByStaff->get($staffId, collect())->contains(function ($b) use ($t, $duration) {
+                    $bs = $this->timeToMinutes($b->start_time);
+                    $be = $this->timeToMinutes($b->end_time);
+                    return $this->overlap($t, $t + $duration, $bs, $be);
+                });
+
+                if ($conflicts) {
+                    continue;
+                }
+
+                $availableStaffCount++;
+            }
+
+            // No staff scheduled at all for this window — skip silently (no slot to show).
+            if ($totalScheduledStaff === 0) {
+                continue;
+            }
+
+            $capacity = $availableStaffCount;
+            $availableRoomCount = null;
+
+            if ($rooms->isNotEmpty()) {
+                $availableRoomCount = 0;
+                foreach ($rooms as $room) {
+                    $conflicts = $busyByRoom->get($room->room_id, collect())->contains(function ($b) use ($t, $duration) {
+                        $bs = $this->timeToMinutes($b->start_time);
+                        $be = $this->timeToMinutes($b->end_time);
+                        return $this->overlap($t, $t + $duration, $bs, $be);
+                    });
+
+                    if ($conflicts) {
+                        continue;
+                    }
+
+                    $availableRoomCount++;
+                }
+
+                $capacity = min($capacity, $availableRoomCount);
+            }
+
+            $maxCapacity = $rooms->isNotEmpty()
+                ? min($totalScheduledStaff, $rooms->count())
+                : $totalScheduledStaff;
+
+            $bookedCount = $maxCapacity - max(0, $capacity);
+            $status = $capacity > 0 ? 'available' : 'full';
+
+            $results[] = [
+                'slot_id' => 'TMP:' . $serviceId . ':' . $date . ':' . $start,
+                'slot_date' => $date,
+                'start_time' => $start,
+                'end_time' => $end,
+                'status' => $status,
+                'capacity' => max(0, $capacity),
+                'max_capacity' => $maxCapacity,
+                'booked_count' => $bookedCount,
+            ];
+        }
+
+        return $results;
     }
 
     public function show()
@@ -86,33 +175,22 @@ class ScheduleController extends Controller
         $hasApproval = Schema::hasTable('schedule') && Schema::hasColumn('schedule', 'approval_status');
         $hasRooms = Schema::hasTable('treatment_room');
 
-        // Pull candidate staff for that date
-        $staffIds = collect();
-        if (Schema::hasTable('staff') && Schema::hasTable('schedule')) {
-            $staffIds = DB::table('schedule as sc')
-                ->join('staff as st', 'st.staff_id', '=', 'sc.staff_id')
-                ->where('st.work_status', 'active')
-                ->whereDate('sc.schedule_date', $date)
-                ->where('sc.status', 'active')
-                ->when($hasApproval, fn ($q) => $q->where('sc.approval_status', 'approved'))
-                ->select('sc.staff_id')
-                ->distinct()
-                ->pluck('sc.staff_id');
-        }
-
-        if ($staffIds->isEmpty()) {
+        if (!Schema::hasTable('staff') || !Schema::hasTable('schedule')) {
             return response()->json(['slots' => []]);
         }
 
-        // Pull schedule rows for those staff on that date
-        $scheduleRows = DB::table('schedule')
-            ->whereIn('staff_id', $staffIds->all())
-            ->whereDate('schedule_date', $date)
-            ->where('status', 'active')
-            ->when($hasApproval, fn ($q) => $q->where('approval_status', 'approved'))
-            ->get(['staff_id', 'start_time', 'end_time']);
+        $scheduleRows = DB::table('schedule as sc')
+            ->join('staff as st', 'st.staff_id', '=', 'sc.staff_id')
+            ->where('st.work_status', 'active')
+            ->whereDate('sc.schedule_date', $date)
+            ->where('sc.status', 'active')
+            ->when($hasApproval, fn ($q) => $this->applyApprovedScheduleFilter($q, 'sc.approval_status'))
+            ->get(['sc.staff_id', 'sc.start_time', 'sc.end_time']);
 
-        // Existing occupied slots on that date (held/booked)
+        if ($scheduleRows->isEmpty()) {
+            return response()->json(['slots' => []]);
+        }
+
         $busySlots = Schema::hasTable('slot')
             ? DB::table('slot')
                 ->whereDate('slot_date', $date)
@@ -120,7 +198,6 @@ class ScheduleController extends Controller
                 ->get(['staff_id', Schema::hasColumn('slot', 'room_id') ? 'room_id' : DB::raw('NULL as room_id'), 'start_time', 'end_time'])
             : collect();
 
-        // Rooms (optional: if no rooms, we still allow slots based on staff only)
         $rooms = collect();
         if ($hasRooms) {
             $rooms = DB::table('treatment_room')
@@ -133,77 +210,69 @@ class ScheduleController extends Controller
                     Schema::hasColumn('treatment_room', 'status') ? 'status' : DB::raw("'available' as status"),
                     Schema::hasColumn('treatment_room', 'category_id') ? 'category_id' : DB::raw('NULL as category_id'),
                 ]);
+
+            if ($rooms->isEmpty()) {
+                $rooms = $this->getDefaultRoomsForCategory($serviceCategoryId);
+            }
         }
 
-        $officeStart = 10 * 60;
-        $officeEnd = 19 * 60;
-        $step = 30; // minutes
+        $results = $this->buildAvailableSlotsForDate((int)$data['service_id'], $duration, $scheduleRows, $busySlots, $rooms, $date);
 
-        $scheduleByStaff = $scheduleRows->groupBy('staff_id');
-        $busyByStaff = $busySlots->whereNotNull('staff_id')->groupBy('staff_id');
-        $busyByRoom = $busySlots->whereNotNull('room_id')->groupBy('room_id');
+        return response()->json(['slots' => $results]);
+    }
 
-        $results = [];
+    private function applyApprovedScheduleFilter($query, string $column)
+    {
+        $query->where(function ($q) use ($column) {
+            $q->where($column, 'approved')
+                ->orWhereNull($column)
+                ->orWhere($column, '');
+        });
+    }
 
-        for ($t = $officeStart; $t + $duration <= $officeEnd; $t += $step) {
-            $start = $this->minutesToTime($t);
-            $end = $this->minutesToTime($t + $duration);
+    private function getDefaultRoomsForCategory(?int $serviceCategoryId): Collection
+    {
+        if (!Schema::hasTable('service_category')) {
+            return collect();
+        }
 
-            // Find at least 1 available staff
-            $hasAnyStaff = false;
-            foreach ($staffIds as $staffId) {
-                $ranges = $scheduleByStaff->get($staffId, collect());
-                $onShift = $ranges->contains(function ($r) use ($t, $duration) {
-                    $s = $this->timeToMinutes($r->start_time);
-                    $e = $this->timeToMinutes($r->end_time);
-                    return $t >= $s && ($t + $duration) <= $e;
-                });
-                if (!$onShift) continue;
+        $category = DB::table('service_category')
+            ->where('id', $serviceCategoryId)
+            ->first(['name', 'gender']);
 
-                $conflicts = $busyByStaff->get($staffId, collect())->contains(function ($b) use ($t, $duration) {
-                    $bs = $this->timeToMinutes($b->start_time);
-                    $be = $this->timeToMinutes($b->end_time);
-                    return $this->overlap($t, $t + $duration, $bs, $be);
-                });
-                if ($conflicts) continue;
+        $name = strtolower((string) ($category->name ?? ''));
+        $gender = $category->gender ?? 'unisex';
 
-                $hasAnyStaff = true;
+        $roomCounts = [
+            'barber' => 2,
+            'hair spa' => 2,
+            'massage' => 4,
+            'nail' => 3,
+            'foot' => 3,
+            'facial' => 2,
+            'makeup' => 2,
+            'muslimah' => 2,
+        ];
+
+        $count = 2;
+        foreach ($roomCounts as $needle => $rooms) {
+            if (str_contains($name, $needle)) {
+                $count = $rooms;
                 break;
             }
+        }
 
-            if (!$hasAnyStaff) {
-                continue;
-            }
-
-            // Find at least 1 available room (if we use rooms); otherwise allow slot with staff only
-            if ($rooms->isNotEmpty()) {
-                $hasAnyRoom = false;
-                foreach ($rooms as $room) {
-                    $conflicts = $busyByRoom->get($room->room_id, collect())->contains(function ($b) use ($t, $duration) {
-                        $bs = $this->timeToMinutes($b->start_time);
-                        $be = $this->timeToMinutes($b->end_time);
-                        return $this->overlap($t, $t + $duration, $bs, $be);
-                    });
-                    if ($conflicts) continue;
-                    $hasAnyRoom = true;
-                    break;
-                }
-                if (!$hasAnyRoom) {
-                    continue;
-                }
-            }
-
-            $tmpId = 'TMP:' . (int) $data['service_id'] . ':' . $date . ':' . $start;
-            $results[] = [
-                'slot_id' => $tmpId,
-                'slot_date' => $date,
-                'start_time' => $start,
-                'end_time' => $end,
+        $rooms = [];
+        for ($i = 1; $i <= $count; $i++) {
+            $rooms[] = (object) [
+                'room_id' => $i,
                 'status' => 'available',
+                'category_id' => $serviceCategoryId,
+                'gender' => $gender,
             ];
         }
 
-        return response()->json(['slots' => $results]);
+        return collect($rooms);
     }
 
     // GET /booking/slots/month?service_id=3&month=2026-03-01
@@ -225,18 +294,61 @@ class ScheduleController extends Controller
             return response()->json(['dates' => []]);
         }
 
-        $dates = DB::table('schedule as sc')
+        $scheduleRows = DB::table('schedule as sc')
             ->join('staff as st', 'st.staff_id', '=', 'sc.staff_id')
             ->where('st.work_status', 'active')
             ->whereBetween('sc.schedule_date', [$start, $end])
             ->where('sc.status', 'active')
-            ->when($hasApproval, fn ($q) => $q->where('sc.approval_status', 'approved'))
-            ->selectRaw('sc.schedule_date')
-            ->distinct()
-            ->orderBy('sc.schedule_date')
-            ->pluck('schedule_date')
-            ->map(fn ($d) => (string) $d)
-            ->values();
+            ->when($hasApproval, fn ($q) => $this->applyApprovedScheduleFilter($q, 'sc.approval_status'))
+            ->get(['sc.staff_id', 'sc.schedule_date', 'sc.start_time', 'sc.end_time']);
+
+        if ($scheduleRows->isEmpty()) {
+            return response()->json(['dates' => []]);
+        }
+
+        $busySlots = Schema::hasTable('slot')
+            ? DB::table('slot')
+                ->whereBetween('slot_date', [$start, $end])
+                ->whereIn('status', ['held', 'booked'])
+                ->get(['staff_id', Schema::hasColumn('slot', 'room_id') ? 'room_id' : DB::raw('NULL as room_id'), 'slot_date', 'start_time', 'end_time'])
+            : collect();
+
+        $service = DB::table('service')->where('id', (int) $data['service_id'])->first();
+        if (!$service) {
+            return response()->json(['dates' => []]);
+        }
+
+        $duration = (int) ($service->duration_minutes ?? 60);
+        $duration = max(15, min(240, $duration));
+        $serviceCategoryId = property_exists($service, 'category_id') ? (int) $service->category_id : null;
+        $hasRooms = Schema::hasTable('treatment_room');
+
+        $rooms = collect();
+        if ($hasRooms) {
+            $rooms = DB::table('treatment_room')
+                ->when(Schema::hasColumn('treatment_room', 'is_active'), fn ($q) => $q->where('is_active', true))
+                ->when(Schema::hasColumn('treatment_room', 'status'), fn ($q) => $q->where('status', '!=', 'maintenance'))
+                ->when(Schema::hasColumn('treatment_room', 'category_id') && $serviceCategoryId, fn ($q) => $q->where('category_id', $serviceCategoryId))
+                ->orderBy('room_id')
+                ->get([
+                    'room_id',
+                    Schema::hasColumn('treatment_room', 'status') ? 'status' : DB::raw("'available' as status"),
+                    Schema::hasColumn('treatment_room', 'category_id') ? 'category_id' : DB::raw('NULL as category_id'),
+                ]);
+
+            if ($rooms->isEmpty()) {
+                $rooms = $this->getDefaultRoomsForCategory($serviceCategoryId);
+            }
+        }
+
+        $dates = [];
+        foreach ($scheduleRows->groupBy('schedule_date') as $date => $rows) {
+            $dayBusySlots = $busySlots->where('slot_date', $date);
+            $availableSlots = $this->buildAvailableSlotsForDate((int)$data['service_id'], $duration, $rows, $dayBusySlots, $rooms, (string) $date);
+            if (!empty($availableSlots)) {
+                $dates[] = (string) $date;
+            }
+        }
 
         return response()->json(['dates' => $dates]);
     }

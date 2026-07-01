@@ -62,18 +62,30 @@ class ReviewController extends Controller
         ];
 
         $canReviewBookings = DB::table('booking as b')
-            ->join('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
-            ->join('service as sv', 'sv.id', '=', 'sl.service_id')
+            ->leftJoin('slot as sl', 'sl.slot_id', '=', 'b.slot_id')
             ->leftJoin('review as r', 'r.booking_id', '=', 'b.booking_id')
             ->where('b.customer_id', $customer->customer_id)
-            ->whereIn('b.status', ['completed', 'confirmed'])
+            ->where('b.status', 'completed')
             ->whereNull('r.review_id')
-            ->select([
-                'b.booking_id',
-                'sv.name as service_name',
-                'sl.slot_date',
-            ])
-            ->orderByDesc('sl.slot_date')
+            ->selectRaw("
+                b.booking_id,
+                (SELECT sv.name FROM service sv
+                 WHERE sv.id = COALESCE(sl.service_id,
+                   CASE WHEN b.slot_id LIKE 'TMP:%'
+                        THEN SPLIT_PART(b.slot_id, ':', 2)::integer
+                        ELSE NULL END)
+                 LIMIT 1) AS service_name,
+                COALESCE(sl.slot_date::text,
+                  CASE WHEN b.slot_id LIKE 'TMP:%'
+                       THEN SPLIT_PART(b.slot_id, ':', 3)
+                       ELSE NULL END) AS slot_date
+            ")
+            ->orderByRaw("
+                COALESCE(sl.slot_date,
+                  CASE WHEN b.slot_id LIKE 'TMP:%'
+                       THEN SPLIT_PART(b.slot_id, ':', 3)::date
+                       ELSE NULL END) DESC NULLS LAST
+            ")
             ->get();
 
         return Inertia::render('Reviews', [
@@ -88,6 +100,7 @@ class ReviewController extends Controller
             'topReview' => $topReview,
             'stats' => $stats,
             'canReviewBookings' => $canReviewBookings,
+            'initialBookingId' => request()->query('booking_id', ''),
         ]);
     }
 
@@ -107,7 +120,7 @@ class ReviewController extends Controller
         $booking = DB::table('booking')
             ->where('booking_id', $validated['booking_id'])
             ->where('customer_id', $customer->customer_id)
-            ->whereIn('status', ['completed', 'confirmed'])
+            ->where('status', 'completed')
             ->first();
 
         if (!$booking) {
@@ -131,6 +144,6 @@ class ReviewController extends Controller
             'updated_at' => now(),
         ]);
 
-        return back()->with('success', 'Thanks! Your review has been submitted.');
+        return back()->with('success', 'Thank you for your review!');
     }
 }

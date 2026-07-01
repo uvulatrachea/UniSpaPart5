@@ -4,7 +4,6 @@ import CustomerLayout from "@/Layouts/CustomerLayout";
 
 export default function Profile({ auth, stats = {}, status }) {
   const customer = auth?.user || {};
-  const username = customer?.name || "Guest";
   const { flash } = usePage().props;
 
   const [isEditing, setIsEditing] = useState(false);
@@ -62,21 +61,22 @@ export default function Profile({ auth, stats = {}, status }) {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json",
           "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')?.content,
         },
         body: JSON.stringify(formData),
       });
 
       const data = await response.json();
-      if (response.ok) {
-        setMessage("Profile updated successfully.");
+      if (data?.ok) {
+        setMessage(data.message || "Profile updated successfully.");
         setIsEditing(false);
       } else if (data?.errors) {
         setErrors(data.errors);
       } else {
-        setMessage("Failed to update profile. Please try again.");
+        setMessage(data?.message || "Failed to update profile. Please try again.");
       }
-    } catch {
+    } catch (err) {
       setMessage("Failed to update profile. Please try again.");
     } finally {
       setIsLoading(false);

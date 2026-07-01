@@ -1,57 +1,81 @@
 services:
-    nginx:
-        image: nginx:1.25-alpine
-        container_name: unispa-nginx
-        ports:
-            - '8080:80'
-        volumes:
-            - '.:/app'
-            - './docker/nginx/nginx.conf:/etc/nginx/nginx.conf'
-        depends_on:
-            - php
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: unispa-nginx
+    ports:
+      - '8080:80'
+    volumes:
+      - '.:/app'
+      - './docker/nginx/nginx.conf:/etc/nginx/nginx.conf'
+    depends_on:
+      - php
+    networks:
+      - unispa-net
 
-    php:
-        build:
-            context: .
-            dockerfile: DockerFile
-        container_name: unispa-php
-        working_dir: /var/www/html
-        command: php artisan serve --host=0.0.0.0 --port=80
-        ports:
-            - '8000:80'
-        volumes:
-            - '.:/var/www/html'
-        environment:
-            APP_ENV: local
-            APP_DEBUG: 'true'
-            DB_CONNECTION: pgsql
-            DB_HOST: pgsql
-            DB_PORT: 5432
-            DB_DATABASE: unispa
-            DB_USERNAME: sail
-            DB_PASSWORD: password
-            DB_SSLMODE: disable
-        depends_on:
-            pgsql:
-                condition: service_healthy
+  php:
+    build:
+      context: .
+      dockerfile: DockerFile
+    container_name: unispa-php
+    working_dir: /var/www/html
+    command: php artisan serve --host=0.0.0.0 --port=80
+    ports:
+      - '8000:80'
+    volumes:
+      - '.:/var/www/html'
+    environment:
+      APP_ENV: local
+      APP_DEBUG: 'true'
+      DB_CONNECTION: pgsql
+      DB_HOST: pgsql
+      DB_PORT: 5432
+      DB_DATABASE: unispa
+      DB_USERNAME: sail
+      DB_PASSWORD: password
+      DB_SSLMODE: disable
+      PHP_CLI_SERVER_WORKERS: 8
+    depends_on:
+      pgsql:
+        condition: service_healthy
+    networks:
+      - unispa-net
 
-    pgsql:
-        image: postgres:16-alpine
-        container_name: unispa-pgsql
-        ports:
-            - '5432:5432'
-        environment:
-            POSTGRES_DB: unispa
-            POSTGRES_USER: sail
-            POSTGRES_PASSWORD: password
-            POSTGRES_HOST_AUTH_METHOD: trust
-        volumes:
-            - pgsql-data:/var/lib/postgresql/data
-        healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U sail -d unispa"]
-            interval: 5s
-            timeout: 5s
-            retries: 10
+  pgsql:
+    image: postgres:16-alpine
+    container_name: unispa-pgsql
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_DB: unispa
+      POSTGRES_USER: sail
+      POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - pgsql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sail -d unispa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - unispa-net
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: unispa-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: password
+    ports:
+      - '50432:80'
+    networks:
+      - unispa-net
+    depends_on:
+      - pgsql
 
 volumes:
-    pgsql-data:
+  pgsql-data:
+
+networks:
+  unispa-net:
+    driver: bridge

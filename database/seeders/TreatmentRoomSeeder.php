@@ -21,11 +21,30 @@ class TreatmentRoomSeeder extends Seeder
         }
 
         $roomNumber = 1;
+        $defaultRoomCounts = [
+            'barber' => 2,
+            'hair spa' => 2,
+            'massage' => 4,
+            'nail' => 3,
+            'foot' => 3,
+            'facial' => 2,
+            'makeup' => 2,
+            'muslimah' => 2,
+        ];
 
         foreach ($categories as $cat) {
-            // Two rooms per category for better availability
-            for ($i = 1; $i <= 2; $i++) {
-                $roomName = 'Room ' . str_pad($roomNumber, 2, '0', STR_PAD_LEFT);
+            $roomName = strtolower((string) $cat->name);
+            $count = 2;
+            foreach ($defaultRoomCounts as $needle => $rooms) {
+                if (str_contains($roomName, $needle)) {
+                    $count = $rooms;
+                    break;
+                }
+            }
+
+            for ($i = 1; $i <= $count; $i++) {
+                $roomLabel = str_pad($roomNumber, 2, '0', STR_PAD_LEFT);
+                $roomName = $cat->name . ' Room ' . $roomLabel;
 
                 DB::table('treatment_room')->updateOrInsert(
                     ['room_name' => $roomName],
@@ -44,6 +63,6 @@ class TreatmentRoomSeeder extends Seeder
             }
         }
 
-        $this->command->info("TreatmentRoomSeeder: {$categories->count()} categories × 2 = " . (($roomNumber - 1)) . " rooms created.");
+        $this->command->info("TreatmentRoomSeeder: created " . ($roomNumber - 1) . " rooms across {$categories->count()} categories.");
     }
 }

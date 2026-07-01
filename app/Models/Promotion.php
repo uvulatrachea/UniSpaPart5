@@ -14,7 +14,8 @@ class Promotion extends Model
 
     protected $fillable = [
         'title','description','discount_type','discount_value',
-        'banner_image','link','start_date','end_date','is_active'
+        'banner_image','link','promo_code','start_date','end_date','is_active',
+        'promotion_type','show_in_dashboard_header',
     ];
 
     public function services()

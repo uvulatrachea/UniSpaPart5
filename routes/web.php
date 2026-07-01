@@ -181,6 +181,12 @@ Route::middleware('auth:customer')->group(function () {
     Route::post('/booking/cart/clear', [CartController::class, 'clear'])
         ->name('booking.cart.clear');
 
+    Route::post('/booking/cart/promo/apply', [CartController::class, 'applyPromo'])
+        ->name('booking.cart.promo.apply');
+
+    Route::post('/booking/cart/promo/remove', [CartController::class, 'removePromo'])
+        ->name('booking.cart.promo.remove');
+
     Route::get('/booking/schedule', [ScheduleController::class, 'show'])
         ->name('booking.schedule');
 
@@ -309,13 +315,13 @@ Route::middleware('admin.only')->prefix('admin')->group(function () {
         ->name('admin.users.staff.destroy');
 
     Route::post('/users/customer', [AdminDashboardController::class, 'storeCustomer'])
-        ->name('admin.users.customer.store');
+        ->name('admin.users.customers.store');
 
     Route::match(['put', 'patch'], '/users/customer/{customerId}', [AdminDashboardController::class, 'updateCustomer'])
-        ->name('admin.users.customer.update');
+        ->name('admin.users.customers.update');
 
     Route::patch('/users/customer/{customerId}/verification', [AdminDashboardController::class, 'updateCustomerVerification'])
-        ->name('admin.users.customer.verification');
+        ->name('admin.users.customers.verification');
 
     Route::delete('/users/customer/{customerId}', [AdminDashboardController::class, 'destroyCustomer'])
         ->name('admin.users.customers.destroy');
@@ -339,7 +345,7 @@ Route::middleware('admin.only')->prefix('admin')->group(function () {
     Route::post('/services/categories', [AdminDashboardController::class, 'storeServiceCategory'])
         ->name('admin.services.categories.store');
 
-    Route::match(['put', 'patch'], '/services/categories/{categoryId}', [AdminDashboardController::class, 'updateServiceCategory'])
+    Route::match(['post', 'put', 'patch'], '/services/categories/{categoryId}', [AdminDashboardController::class, 'updateServiceCategory'])
         ->name('admin.services.categories.update');
 
     Route::delete('/services/categories/{categoryId}', [AdminDashboardController::class, 'destroyServiceCategory'])
@@ -348,7 +354,7 @@ Route::middleware('admin.only')->prefix('admin')->group(function () {
     Route::post('/services/items', [AdminDashboardController::class, 'storeService'])
         ->name('admin.services.items.store');
 
-    Route::match(['put', 'patch'], '/services/items/{serviceId}', [AdminDashboardController::class, 'updateService'])
+    Route::match(['post', 'put', 'patch'], '/services/items/{serviceId}', [AdminDashboardController::class, 'updateService'])
         ->name('admin.services.items.update');
 
     Route::delete('/services/items/{serviceId}', [AdminDashboardController::class, 'destroyService'])
@@ -357,7 +363,7 @@ Route::middleware('admin.only')->prefix('admin')->group(function () {
     Route::post('/services/promotions', [AdminDashboardController::class, 'storePromotion'])
         ->name('admin.services.promotions.store');
 
-    Route::match(['put', 'patch'], '/services/promotions/{promotionId}', [AdminDashboardController::class, 'updatePromotion'])
+    Route::match(['post', 'put', 'patch'], '/services/promotions/{promotionId}', [AdminDashboardController::class, 'updatePromotion'])
         ->name('admin.services.promotions.update');
 
     Route::patch('/services/promotions/{promotionId}/status', [AdminDashboardController::class, 'updatePromotionStatus'])

@@ -235,7 +235,14 @@ export default function Schedule() {
       .finally(() => setLoadingSlots(false));
   };
 
+  const isSlotFull = (slot) => {
+    if (slot.status === "full") return true;
+    if (slot.capacity != null && item?.pax != null && slot.capacity < item.pax) return true;
+    return false;
+  };
+
   const selectSlot = (slot) => {
+    if (isSlotFull(slot)) return;
     setSelectedSlotId(slot.slot_id);
     setSelectedStartTime(slot.start_time);
   };
@@ -451,20 +458,34 @@ export default function Schedule() {
                       <div className="text-gray-400 text-sm">&mdash;</div>
                     ) : (
                       <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
-                        {groupedSlots[p].map((s) => (
-                          <button
-                            key={s.slot_id}
-                            onClick={() => selectSlot(s)}
-                            className={[
-                              "rounded-xl border px-3 py-2 text-sm font-extrabold",
-                              selectedSlotId === s.slot_id
-                                ? "bg-pink-500 text-white border-pink-500"
-                                : "hover:border-pink-500",
-                            ].join(" ")}
-                          >
-                            {fmtTime(s.start_time)}
-                          </button>
-                        ))}
+                        {groupedSlots[p].map((s) => {
+                          const full = isSlotFull(s);
+                          const selected = selectedSlotId === s.slot_id;
+                          return (
+                            <button
+                              key={s.slot_id}
+                              onClick={() => selectSlot(s)}
+                              disabled={full}
+                              className={[
+                                "rounded-xl border px-3 py-2 text-sm font-extrabold transition",
+                                full
+                                  ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                                  : selected
+                                  ? "bg-pink-500 text-white border-pink-500"
+                                  : "hover:border-pink-500",
+                              ].join(" ")}
+                            >
+                              <div>{fmtTime(s.start_time)}</div>
+                              {full ? (
+                                <div className="mt-1 text-[11px] font-semibold text-slate-400">Fully Booked</div>
+                              ) : s.capacity != null ? (
+                                <div className="mt-1 text-[11px] font-semibold text-slate-500">
+                                  {s.capacity > 1 ? `${s.capacity} slots left` : `${s.capacity} slot left`}
+                                </div>
+                              ) : null}
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

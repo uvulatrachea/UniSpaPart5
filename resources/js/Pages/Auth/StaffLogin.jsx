@@ -16,7 +16,7 @@ export default function StaffLogin() {
     const submit = (e) => {
         e.preventDefault();
 
-        post(route('staff.login.post'), {
+        post(route('staff.login.store'), {
             onFinish: () => reset('password'),
         });
     };

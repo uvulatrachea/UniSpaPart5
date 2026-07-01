@@ -34,8 +34,9 @@ export default function ManageScheduling({
     staff_id: "",
     schedule_date: selectedDate,
     start_time: "10:00",
-    end_time: "17:00",
+    end_time: "18:00",
     created_by: "admin",
+    room_id: "",
   });
 
   const monthStatsByDate = useMemo(() => {
@@ -134,8 +135,9 @@ export default function ManageScheduling({
       schedule_date: date,
       staff_id: staffId ? String(staffId) : "",
       start_time: "10:00",
-      end_time: "17:00",
+      end_time: "18:00",
       created_by: "admin",
+      room_id: "",
     });
     setShiftModal({ open: true, date, staffId: staffId ? String(staffId) : "" });
   };
@@ -493,12 +495,12 @@ export default function ManageScheduling({
                 </div>
 
                 <StaffGroup
-                  title="General Staff"
+                  title="Full-Time Staff"
                   items={staffDirectory.general || []}
                   onQuickAssign={(id) => openShift(selectedDate, id)}
                 />
                 <StaffGroup
-                  title="Student Staff"
+                  title="Part-Time Staff"
                   items={staffDirectory.student || []}
                   onQuickAssign={(id) => openShift(selectedDate, id)}
                 />
@@ -568,7 +570,7 @@ export default function ManageScheduling({
                         </div>
 
                         <div className="mt-1 space-y-1 text-[10px]">
-                          <div className={`${isSelected ? "text-white/90" : "text-slate-500"}`}>G: {info.general} • S: {info.student}</div>
+                          <div className={`${isSelected ? "text-white/90" : "text-slate-500"}`}>FT: {info.general} • PT: {info.student}</div>
                           {(info.names || []).slice(0, 2).map((n) => (
                             <div key={`${day.date}-${n}`} className={`truncate rounded px-1 py-0.5 ${isSelected ? "bg-white/20" : "bg-indigo-50 text-indigo-700"}`}>
                               {n}
@@ -595,7 +597,7 @@ export default function ManageScheduling({
                             <div key={`daily-shift-${s.schedule_id}`} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                               <p className="text-xs font-bold text-slate-700">{shortTime(s.start_time)} - {shortTime(s.end_time)}</p>
                               <p className="text-sm font-semibold text-slate-700">{s.staff_name}</p>
-                              <p className="text-[11px] text-slate-500">{humanize(s.staff_type)} • {humanize(s.created_by)}</p>
+                              <p className="text-[11px] text-slate-500">{staffTypeLabel(s.staff_type)} • {humanize(s.created_by)}</p>
                             </div>
                           ))}
                         </div>
@@ -616,7 +618,7 @@ export default function ManageScheduling({
                             <div key={`sum-${s.staff_id}`} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
                               <div>
                                 <p className="text-sm font-semibold text-slate-700">{s.staff_name}</p>
-                                <p className="text-[11px] text-slate-500">{humanize(s.staff_type)} • {s.unique_days} days</p>
+                                <p className="text-[11px] text-slate-500">{staffTypeLabel(s.staff_type)} • {s.unique_days} days</p>
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700">{s.total_shifts} shifts</span>
@@ -661,7 +663,7 @@ export default function ManageScheduling({
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-extrabold text-slate-700">Student Staff Availability Requests (Pending Approval)</h3>
+              <h3 className="text-sm font-extrabold text-slate-700">Part-Time Staff Availability Requests (Pending Approval)</h3>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -700,7 +702,7 @@ export default function ManageScheduling({
                 <thead className="bg-slate-50 text-left text-slate-500">
                   <tr>
                     <th className="px-3 py-2">Select</th>
-                    <th className="px-3 py-2">Student</th>
+                    <th className="px-3 py-2">Part-Time Staff</th>
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2">Time</th>
                     <th className="px-3 py-2">Status</th>
@@ -762,7 +764,7 @@ export default function ManageScheduling({
                   <option value="">Select staff</option>
                   {selectedStaffOptions.map((s) => (
                     <option key={s.staff_id} value={s.staff_id}>
-                      {s.name} ({humanize(s.staff_type)})
+                      {s.name} ({staffTypeLabel(s.staff_type)})
                     </option>
                   ))}
                 </select>
@@ -822,7 +824,7 @@ export default function ManageScheduling({
                 >
                   <option value="">Select staff</option>
                   {activeStaff.map((s) => (
-                    <option key={s.staff_id} value={s.staff_id}>{s.name} ({humanize(s.staff_type)})</option>
+                    <option key={s.staff_id} value={s.staff_id}>{s.name} ({staffTypeLabel(s.staff_type)})</option>
                   ))}
                 </select>
                 {shiftForm.errors.staff_id && <p className="text-xs text-rose-600">{shiftForm.errors.staff_id}</p>}
@@ -849,6 +851,25 @@ export default function ManageScheduling({
                 onChange={(v) => shiftForm.setData("end_time", v)}
                 error={shiftForm.errors.end_time}
               />
+
+              <label className="text-sm sm:col-span-2">
+                <span className="mb-1 block font-medium text-slate-700">Treatment Room (optional)</span>
+                <select
+                  value={shiftForm.data.room_id}
+                  onChange={(e) => shiftForm.setData("room_id", e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                >
+                  <option value="">No room assigned</option>
+                  {(rooms || []).map((r) => (
+                    <option key={r.room_id} value={r.room_id}>
+                      {r.room_label || r.room_type} (Room {r.room_id})
+                    </option>
+                  ))}
+                </select>
+                {shiftForm.errors.room_id && <p className="text-xs text-rose-600">{shiftForm.errors.room_id}</p>}
+              </label>
+
+              <p className="text-[11px] font-semibold text-slate-500 sm:col-span-2">Business hours: 10:00 – 18:00</p>
 
               <div className="flex justify-end gap-2 sm:col-span-2">
                 <button type="button" onClick={() => setShiftModal({ open: false, date: selectedDate, staffId: "" })} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold">
@@ -942,7 +963,7 @@ function getAvailableStaffForBooking(booking, activeStaff, schedulesByDate, sele
     }
 
     if (String(staff.staff_type) === "general") {
-      return start >= toMinutes("10:00") && end <= toMinutes("17:00");
+      return start >= toMinutes("10:00") && end <= toMinutes("18:00");
     }
 
     return false;
@@ -1019,6 +1040,12 @@ function toMinutes(t) {
 
 function overlap(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && aEnd > bStart;
+}
+
+function staffTypeLabel(type) {
+  if (String(type) === "general") return "Full-Time";
+  if (String(type) === "student") return "Part-Time";
+  return humanize(type);
 }
 
 function humanize(value) {

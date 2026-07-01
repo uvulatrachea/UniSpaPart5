@@ -74,7 +74,10 @@ class Booking extends Model
         }
 
         try {
-            $startAt = Carbon::parse($slot->slot_date . ' ' . $slot->start_time, config('app.timezone'));
+            $dateStr = $slot->slot_date instanceof Carbon
+                ? $slot->slot_date->format('Y-m-d')
+                : (string) $slot->slot_date;
+            $startAt = Carbon::parse($dateStr . ' ' . $slot->start_time, config('app.timezone'));
         } catch (\Throwable) {
             return false;
         }

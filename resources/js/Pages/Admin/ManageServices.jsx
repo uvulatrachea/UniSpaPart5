@@ -210,13 +210,14 @@ export default function ManageServices({
             <div className="mt-4">
               <Table
                 title="Promotions"
-                columns={["Promotion", "Type", "Discount", "Last Day", "Status", "Header", "Services", "Banner", "Action"]}
+                columns={["Promotion", "Code", "Type", "Discount", "Last Day", "Status", "Header", "Services", "Banner", "Action"]}
                 rows={promotions.data || []}
                 links={promotions.links || []}
                 onPaginate={onPaginate}
                 renderRow={(row) => (
                   <>
                     <td className="px-3 py-3"><Cell label={`#${row.promotion_id} ${row.title}`} subtitle={row.description} /></td>
+                    <td className="px-3 py-3">{row.promo_code ? <span className="rounded-md bg-violet-100 px-2 py-1 text-xs font-bold text-violet-700">{row.promo_code}</span> : <span className="text-xs text-slate-400">—</span>}</td>
                     <td className="px-3 py-3"><Badge type={row.promotion_type === "permanent" ? "blue" : "amber"}>{humanize(row.promotion_type)}</Badge></td>
                     <td className="px-3 py-3">{row.discount_type === "fixed" ? `RM ${Number(row.discount_value || 0).toFixed(2)}` : `${Number(row.discount_value || 0)}%`}</td>
                     <td className="px-3 py-3">{row.end_date ? formatDate(row.end_date) : "No End Date"}</td>
@@ -391,6 +392,7 @@ function PromotionModal({ modal, onClose, allServices = [] }) {
     is_active: !!modal.item?.is_active,
     show_in_dashboard_header: modal.item?.show_in_dashboard_header ?? true,
     link: modal.item?.link || "",
+    promo_code: modal.item?.promo_code || "",
     service_ids: initialServiceIds,
     banner_file: null,
   });
@@ -441,6 +443,7 @@ function PromotionModal({ modal, onClose, allServices = [] }) {
           <SelectField label="Discount Type" value={data.discount_type} onChange={(v) => setData("discount_type", v)} options={["percentage", "fixed"]} />
           <Field label={data.discount_type === "fixed" ? "Discount Amount (RM)" : "Discount (%)"} type="number" value={data.discount_value} onChange={(v) => setData("discount_value", v)} error={errors.discount_value} />
           <Field label="Link (optional)" value={data.link} onChange={(v) => setData("link", v)} error={errors.link} />
+          <Field label="Promo Code (optional, e.g. STUDENT10)" value={data.promo_code} onChange={(v) => setData("promo_code", String(v).toUpperCase())} error={errors.promo_code} />
           <FileField label="Promotion Banner" onChange={(f) => setData("banner_file", f)} error={errors.banner_file} />
         </>
       )}
@@ -675,7 +678,7 @@ function parseLinkedServiceIds(value) {
       if (Array.isArray(parsed)) {
         return parsed.map((v) => Number(v)).filter((v) => Number.isFinite(v));
       }
-    } catch {}
+    } catch { }
   }
 
   return [];

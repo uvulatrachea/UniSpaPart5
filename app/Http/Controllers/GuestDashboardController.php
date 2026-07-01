@@ -13,9 +13,14 @@ class GuestDashboardController extends Controller
 {
     public function index()
     {
-        // ✅ Promotions from DB
+        // Promotions — active, not expired, flagged to show in dashboard header
         $promotions = Promotion::query()
             ->where('is_active', true)
+            ->where('show_in_dashboard_header', true)
+            ->where(function ($q) {
+                $q->whereNull('end_date')
+                  ->orWhere('end_date', '>=', now()->toDateString());
+            })
             ->orderByDesc('promotion_id')
             ->get()
             ->map(function ($p) {
